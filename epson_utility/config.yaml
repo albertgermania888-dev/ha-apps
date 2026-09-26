@@ -1,0 +1,22 @@
+name: "Epson Maintenance Utility"
+version: "1.0.0"
+slug: "epson_utility"
+description: "Web-интерфейс и API для сервисного обслуживания принтеров Epson."
+arch:
+  - amd64
+  - aarch64
+  - armv7
+init: false
+# Настройки для левого меню
+ingress: true
+ingress_port: 8099
+panel_icon: "mdi:printer-settings"
+panel_title: "Epson Service"
+map:
+  - config:rw
+options:
+  printer_ip: "192.168.1.108"
+schema:
+  printer_ip: str
+ports:
+  8099/tcp: 8099
