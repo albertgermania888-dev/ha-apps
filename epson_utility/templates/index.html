@@ -31,12 +31,11 @@
             const btnN = document.getElementById('btn_nozzle');
             const btnC = document.getElementById('btn_clean');
             
-            statusDiv.innerText = "Выполнение (ожидание ответа)...";
+            statusDiv.innerText = "Формирование задания и проверка статуса...";
             statusDiv.style.color = "#333";
             btnN.disabled = true;
             btnC.disabled = true;
             
-            // ВАЖНО: Путь без начального слеша для корректной работы HA Ingress
             fetch('api/' + action, { method: 'POST' })
                 .then(response => response.json())
                 .then(data => {
