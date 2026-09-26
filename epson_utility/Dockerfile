@@ -1,10 +1,12 @@
-FROM python:3.11-slim
+FROM debian:bookworm-slim
 
+# Устанавливаем системный Python, нужные библиотеки и драйверы принтера
 RUN apt-get update && apt-get install -y \
-    printer-driver-gutenprint \
-    iputils-ping \
+    python3 \
     python3-flask \
     python3-requests \
+    printer-driver-gutenprint \
+    iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
 COPY app.py /app.py
