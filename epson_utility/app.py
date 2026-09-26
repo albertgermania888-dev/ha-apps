@@ -44,37 +44,37 @@ def do_action(action):
     
     print(f"[INFO] Запуск команды: {action} для принтера {ip}")
 
-    # 1. Генерируем команды и сохраняем СТРОГО в файл
-    # -q подавляет вывод лицензии, > /dev/null скрывает остальной текстовый мусор
+    # ИСПОЛЬЗУЕМ СТАНДАРТНЫЙ ВЫВОД:
+    # -q (без текста), -u (режим нового принтера)
+    # < /dev/null - запрет ожидания ввода от пользователя
+    # > temp_file - перехват бинарного вывода в файл
+    # 2>/dev/null - удаление любых текстовых предупреждений
     if action == "nozzle_check":
-        esc_cmd = f"escputil --nozzle-check -q --raw-device={temp_file} > /dev/null 2>&1"
+        esc_cmd = f"escputil --nozzle-check -q -u < /dev/null > {temp_file} 2>/dev/null"
     elif action == "clean_head":
-        esc_cmd = f"escputil --clean-head -q --raw-device={temp_file} > /dev/null 2>&1"
+        esc_cmd = f"escputil --clean-head -q -u < /dev/null > {temp_file} 2>/dev/null"
     else:
         return jsonify({"status": "ERROR", "msg": "Неизвестная команда"}), 400
 
-    print(f"[INFO] Выполнение: {esc_cmd}")
+    print(f"[INFO] Выполнение генерации: {esc_cmd}")
     os.system(esc_cmd)
 
-    # Проверяем, сформировался ли бинарный файл с заданием
     if not os.path.exists(temp_file) or os.path.getsize(temp_file) == 0:
-        err_msg = "Файл задания не сформирован (возможно, принтер не поддерживается или утилита вернула ошибку)"
+        err_msg = "Файл задания не сформирован (утилита вернула пустой результат)."
         print(f"[ERROR] {err_msg}")
         update_ha_sensor("ERROR", err_msg)
         return jsonify({"status": "ERROR", "msg": err_msg}), 500
 
-    # 2. Отправляем чистый бинарный файл на принтер через netcat
+    # Отправляем чистый бинарный файл на принтер через netcat
     nc_cmd = f"nc -q 1 -w 10 {ip} 9100 < {temp_file}"
     print(f"[INFO] Отправка данных по сети: {nc_cmd}")
     
     result = subprocess.run(nc_cmd, shell=True, capture_output=True, text=True)
 
-    # 3. Убираем за собой
     if os.path.exists(temp_file):
         os.remove(temp_file)
         print("[INFO] Временный файл задания удален")
 
-    # Обработка результатов сети
     if result.returncode == 0:
         msg = f"Команда '{action}' успешно доставлена на принтер"
         print(f"[SUCCESS] {msg}")
@@ -84,9 +84,8 @@ def do_action(action):
         err_msg = result.stderr.strip() if result.stderr else "Ошибка подключения к принтеру (выключен или недоступен)"
         print(f"[ERROR] Сетевая ошибка: {err_msg}")
         update_ha_sensor("ERROR", err_msg)
-        return jsonify({"status": "ERROR", "msg": err_msg})
+        return jsonify({"status": "ERROR", "msg": err_msg}), 500
 
 if __name__ == "__main__":
-    # Явное включение небуферизованного вывода для Docker логов
     os.environ["PYTHONUNBUFFERED"] = "1"
     app.run(host="0.0.0.0", port=8099)
