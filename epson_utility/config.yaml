@@ -1,7 +1,7 @@
 name: "Epson Smart Service"
-version: "4.1.0"
+version: "1.0.0"
 slug: "epson_utility"
-description: "Сервисное обслуживание, статус и автопоиск принтера."
+description: "Печать документов с настройками, предпросмотр, сервис и автопоиск."
 arch:
   - amd64
   - aarch64
