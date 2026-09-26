@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     python3-requests \
     python3-werkzeug \
     python3-zeroconf \
+    imagemagick \
     iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
