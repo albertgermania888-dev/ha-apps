@@ -30,14 +30,15 @@
             statusDiv.innerText = "Выполнение...";
             statusDiv.style.color = "#333";
             
-            fetch('/api/' + action, { method: 'POST' })
+            // ИСПРАВЛЕНИЕ: убран первый слеш, теперь путь относительный ('api/' вместо '/api/')
+            fetch('api/' + action, { method: 'POST' })
                 .then(response => response.json())
                 .then(data => {
                     statusDiv.innerText = data.msg;
                     statusDiv.style.color = data.status === "SUCCESS" ? "green" : "red";
                 })
                 .catch(err => {
-                    statusDiv.innerText = "Ошибка сети";
+                    statusDiv.innerText = "Ошибка сети: " + err.message;
                     statusDiv.style.color = "red";
                 });
         }
