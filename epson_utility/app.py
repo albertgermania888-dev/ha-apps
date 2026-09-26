@@ -6,7 +6,6 @@ from flask import Flask, render_template, jsonify
 
 app = Flask(__name__)
 
-# Пути и константы Home Assistant
 OPTIONS_PATH = "/data/options.json"
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN", "")
 HA_API_URL = "http://supervisor/core/api/states/sensor.epson_print_result"
@@ -32,7 +31,7 @@ def update_ha_sensor(state, message=""):
     try:
         requests.post(HA_API_URL, headers=headers, json=data, timeout=5)
     except Exception as e:
-        print(f"HA Sensor update error: {e}")
+        print(f"[WARNING] Ошибка обновления сенсора HA: {e}")
 
 @app.route("/")
 def index():
@@ -41,52 +40,53 @@ def index():
 @app.route("/api/<action>", methods=["POST"])
 def do_action(action):
     ip = get_ip()
+    temp_file = "/tmp/epson_job.bin"
+    
+    print(f"[INFO] Запуск команды: {action} для принтера {ip}")
 
-    # escputil генерирует ESC/P команды и выдает их в стандартный вывод (/dev/stdout)
+    # 1. Генерируем команды и сохраняем СТРОГО в файл
+    # -q подавляет вывод лицензии, > /dev/null скрывает остальной текстовый мусор
     if action == "nozzle_check":
-        esc_cmd = ["escputil", "--nozzle-check", "--raw-device=/dev/stdout"]
+        esc_cmd = f"escputil --nozzle-check -q --raw-device={temp_file} > /dev/null 2>&1"
     elif action == "clean_head":
-        esc_cmd = ["escputil", "--clean-head", "--raw-device=/dev/stdout"]
+        esc_cmd = f"escputil --clean-head -q --raw-device={temp_file} > /dev/null 2>&1"
     else:
         return jsonify({"status": "ERROR", "msg": "Неизвестная команда"}), 400
 
-    # netcat отправляет полученные данные на 9100 порт принтера (-q 1 = выйти через 1 сек после отправки)
-    nc_cmd = ["nc", "-q", "1", ip, "9100"]
+    print(f"[INFO] Выполнение: {esc_cmd}")
+    os.system(esc_cmd)
 
-    try:
-        # Связываем вывод первой команды с вводом второй (аналог pipe | в терминале)
-        p1 = subprocess.Popen(esc_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        p2 = subprocess.Popen(nc_cmd, stdin=p1.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
-        # Разрешаем p1 завершиться, если p2 отвалится
-        p1.stdout.close()
-        
-        # Ждем завершения отправки сети (p2)
-        out, err = p2.communicate(timeout=45)
-        # Получаем возможные ошибки от утилиты принтера
-        p1_out, p1_err = p1.communicate(timeout=5)
-        
-        err_msg = err.decode('utf-8').strip()
-        p1_err_msg = p1_err.decode('utf-8').strip()
+    # Проверяем, сформировался ли бинарный файл с заданием
+    if not os.path.exists(temp_file) or os.path.getsize(temp_file) == 0:
+        err_msg = "Файл задания не сформирован (возможно, принтер не поддерживается или утилита вернула ошибку)"
+        print(f"[ERROR] {err_msg}")
+        update_ha_sensor("ERROR", err_msg)
+        return jsonify({"status": "ERROR", "msg": err_msg}), 500
 
-        if p2.returncode == 0:
-            update_ha_sensor("SUCCESS", f"Команда {action} успешно отправлена")
-            return jsonify({"status": "SUCCESS", "msg": "Успешно отправлено на принтер"})
-        else:
-            # Если принтер выключен, nc вернет ошибку подключения
-            final_err = err_msg if err_msg else (p1_err_msg if p1_err_msg else "Ошибка подключения к принтеру")
-            update_ha_sensor("ERROR", final_err)
-            return jsonify({"status": "ERROR", "msg": final_err})
+    # 2. Отправляем чистый бинарный файл на принтер через netcat
+    nc_cmd = f"nc -q 1 -w 10 {ip} 9100 < {temp_file}"
+    print(f"[INFO] Отправка данных по сети: {nc_cmd}")
+    
+    result = subprocess.run(nc_cmd, shell=True, capture_output=True, text=True)
 
-    except subprocess.TimeoutExpired:
-        # Защита от зависших процессов
-        p2.kill()
-        p1.kill()
-        update_ha_sensor("ERROR", "Таймаут сетевого соединения")
-        return jsonify({"status": "ERROR", "msg": "Принтер не отвечает (таймаут)"})
-    except Exception as e:
-        update_ha_sensor("ERROR", str(e))
-        return jsonify({"status": "ERROR", "msg": str(e)})
+    # 3. Убираем за собой
+    if os.path.exists(temp_file):
+        os.remove(temp_file)
+        print("[INFO] Временный файл задания удален")
+
+    # Обработка результатов сети
+    if result.returncode == 0:
+        msg = f"Команда '{action}' успешно доставлена на принтер"
+        print(f"[SUCCESS] {msg}")
+        update_ha_sensor("SUCCESS", msg)
+        return jsonify({"status": "SUCCESS", "msg": "Успешно отправлено на принтер"})
+    else:
+        err_msg = result.stderr.strip() if result.stderr else "Ошибка подключения к принтеру (выключен или недоступен)"
+        print(f"[ERROR] Сетевая ошибка: {err_msg}")
+        update_ha_sensor("ERROR", err_msg)
+        return jsonify({"status": "ERROR", "msg": err_msg})
 
 if __name__ == "__main__":
+    # Явное включение небуферизованного вывода для Docker логов
+    os.environ["PYTHONUNBUFFERED"] = "1"
     app.run(host="0.0.0.0", port=8099)
