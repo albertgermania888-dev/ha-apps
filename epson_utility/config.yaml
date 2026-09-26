@@ -1,7 +1,7 @@
 name: "Epson Smart Service"
 version: "1.0.0"
 slug: "epson_utility"
-description: "Печать документов с настройками, предпросмотр, сервис и автопоиск."
+description: "Сервис автоматической печати тестовой страницы по расписанию с функцией печати документов для принтеров Epson."
 arch:
   - amd64
   - aarch64
@@ -16,5 +16,11 @@ map:
   - config:rw
 options:
   printer_ip: "auto"
+  auto_check_enabled: false
+  auto_check_days: 7
+  notify_service: ""
 schema:
   printer_ip: str
+  auto_check_enabled: bool
+  auto_check_days: int
+  notify_service: str
