@@ -1,5 +1,5 @@
 name: "Epson Maintenance Utility"
-version: "1.0.0"
+version: "1.0.1"
 slug: "epson_utility"
 description: "Web-интерфейс и API для сервисного обслуживания принтеров Epson."
 arch:
