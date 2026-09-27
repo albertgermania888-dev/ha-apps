@@ -1,5 +1,5 @@
 name: "Epson Smart Service"
-version: "1.0.2"
+version: "1.0.3"
 slug: "epson_utility"
 description: "Сервис автоматической печати тестовой страницы по расписанию с функцией печати документов для принтеров Epson."
 arch:
