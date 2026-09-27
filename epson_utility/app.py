@@ -45,28 +45,39 @@ def save_state(state):
     with open(STATE_PATH, "w") as f:
         json.dump(state, f)
 
+# Доработано: возвращает статус (True/False), код ошибки и сам текст ответа HA
 def send_notify(msg):
     opts = get_options()
     entity_id = str(opts.get("notify_service", "")).strip()
     
-    if not entity_id or not SUPERVISOR_TOKEN:
-        return
+    if not entity_id:
+        return False, 0, "В Конфигурации аддона не указана служба (notify_service пуст)"
+    if not SUPERVISOR_TOKEN:
+        return False, 0, "Нет доступа к SUPERVISOR_TOKEN"
         
     url = "http://supervisor/core/api/services/notify/send_message"
     headers = {"Authorization": f"Bearer {SUPERVISOR_TOKEN}", "Content-Type": "application/json"}
     
     try:
+        # Попробуем передать entity_id и в корне, и внутри target, 
+        # чтобы гарантированно подошло под любую версию Home Assistant
         payload = {
             "entity_id": entity_id,
+            "target": {"entity_id": entity_id},
             "message": msg
         }
         res = requests.post(url, headers=headers, json=payload, timeout=5)
-        if res.status_code not in [200, 201]:
-            print(f"[ERROR] Ошибка HA notify.send_message ({res.status_code}): {res.text}")
-        else:
+        
+        if res.status_code in [200, 201]:
             print(f"[INFO] Уведомление успешно отправлено на {entity_id}")
+            return True, res.status_code, "OK (Успешно)"
+        else:
+            err_text = res.text
+            print(f"[ERROR] Ошибка HA notify.send_message ({res.status_code}): {err_text}")
+            return False, res.status_code, err_text
     except Exception as e:
-        print(f"[ERROR] Сбой вызова универсальной службы уведомлений: {e}")
+        print(f"[ERROR] Сбой вызова службы: {e}")
+        return False, 0, str(e)
 
 class PrinterListener:
     def __init__(self):
@@ -211,7 +222,6 @@ def api_state():
     device_state["auto_check"] = opts.get("auto_check_enabled", False)
     device_state["auto_check_days"] = int(opts.get("auto_check_days", 7))
     
-    # Расчет дней с момента последней печати
     last_print = st.get("last_print", time.time())
     idle_seconds = time.time() - last_print
     device_state["idle_days"] = int(idle_seconds // 86400)
@@ -244,6 +254,15 @@ def api_render_preview():
     if generate_preview(orientation):
         return jsonify({"status": "SUCCESS", "preview": f"api/preview.jpg?t={time.time()}"})
     return jsonify({"status": "ERROR"})
+
+# Новый маршрут специально для тестирования уведомлений и вывода лога
+@app.route("/api/test_notify", methods=["POST"])
+def api_test_notify():
+    success, code, text = send_notify("Тестовое сообщение от Epson Smart Service!")
+    if success:
+        return jsonify({"status": "SUCCESS", "msg": f"Успех (HTTP {code}):\n{text}"})
+    else:
+        return jsonify({"status": "ERROR", "msg": f"Ошибка (HTTP {code}):\n{text}"})
 
 def execute_print(filepath, data):
     copies = data.get("copies", "1")
