@@ -45,45 +45,54 @@ def save_state(state):
     with open(STATE_PATH, "w") as f:
         json.dump(state, f)
 
-# --- ИДЕАЛЬНО ЧИСТАЯ ФУНКЦИЯ УВЕДОМЛЕНИЙ ДЛЯ НОВЫХ ВЕРСИЙ HA ---
+# --- БРОНЕБОЙНАЯ ФУНКЦИЯ УВЕДОМЛЕНИЙ (4 уровня защиты) ---
 def send_notify(msg):
     opts = get_options()
-    notify_serv = str(opts.get("notify_service", "")).strip()
+    target_val = str(opts.get("notify_service", "")).strip()
     
-    if not notify_serv:
-        return False, 0, "В Конфигурации аддона не указана служба (notify_service пуст)"
+    if not target_val:
+        return False, 0, "Служба не указана во вкладке Конфигурация"
     if not SUPERVISOR_TOKEN:
-        return False, 0, "Нет доступа к API. Проверьте параметр homeassistant_api: true в config.yaml"
-
-    # Разбираем строку (например, notify.telegram_bot_123) на домен и сервис
-    if "." in notify_serv:
-        domain, service = notify_serv.split(".", 1)
-    else:
-        domain = "notify"
-        service = notify_serv
-
-    # Формируем точный URL службы для актуального REST API
-    url = f"http://supervisor/core/api/services/{domain}/{service}"
-    headers = {
-        "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
-        "Content-Type": "application/json"
-    }
+        return False, 0, "Нет токена доступа к API (нужна переустановка аддона)"
+        
+    headers = {"Authorization": f"Bearer {SUPERVISOR_TOKEN}", "Content-Type": "application/json"}
+    errors = []
     
-    # Отправляем строгий, чистый payload без лишних полей
-    payload = {"message": msg}
-    
+    # Метод 1: Современный notify.send_message
     try:
-        res = requests.post(url, headers=headers, json=payload, timeout=10)
-        if res.status_code in [200, 201]:
-            print(f"[INFO] Уведомление успешно отправлено через {domain}.{service}")
-            return True, res.status_code, "OK (Успешно отправлено)"
-        else:
-            err_text = res.text
-            print(f"[ERROR] Отказ HA API ({res.status_code}): {err_text}")
-            return False, res.status_code, err_text
-    except Exception as e:
-        print(f"[ERROR] Сбой сети при вызове службы: {e}")
-        return False, 0, str(e)
+        url1 = "http://supervisor/core/api/services/notify/send_message"
+        res1 = requests.post(url1, headers=headers, json={"entity_id": target_val, "message": msg}, timeout=5)
+        if res1.status_code in [200, 201]: return True, res1.status_code, "Успех (notify.send_message)"
+        errors.append(f"V1: {res1.status_code} {res1.text.strip()}")
+    except Exception as e: errors.append(f"V1 Ошибка: {e}")
+
+    # Метод 2: Прямой вызов службы (как было в старых версиях HA)
+    try:
+        if "." in target_val:
+            domain, service = target_val.split(".", 1)
+            url2 = f"http://supervisor/core/api/services/{domain}/{service}"
+            res2 = requests.post(url2, headers=headers, json={"message": msg}, timeout=5)
+            if res2.status_code in [200, 201]: return True, res2.status_code, f"Успех (прямой вызов {domain}.{service})"
+            errors.append(f"V2: {res2.status_code} {res2.text.strip()}")
+    except Exception as e: errors.append(f"V2 Ошибка: {e}")
+        
+    # Метод 3: Универсальный вызов Telegram
+    try:
+        url3 = "http://supervisor/core/api/services/telegram_bot/send_message"
+        res3 = requests.post(url3, headers=headers, json={"message": msg}, timeout=5)
+        if res3.status_code in [200, 201]: return True, res3.status_code, "Успех (telegram_bot.send_message)"
+        errors.append(f"V3: {res3.status_code} {res3.text.strip()}")
+    except Exception as e: errors.append(f"V3 Ошибка: {e}")
+        
+    # Метод 4: Глобальный бродкаст уведомлений HA
+    try:
+        url4 = "http://supervisor/core/api/services/notify/notify"
+        res4 = requests.post(url4, headers=headers, json={"message": msg}, timeout=5)
+        if res4.status_code in [200, 201]: return True, res4.status_code, "Успех (notify.notify)"
+        errors.append(f"V4: {res4.status_code} {res4.text.strip()}")
+    except Exception as e: errors.append(f"V4 Ошибка: {e}")
+
+    return False, 400, "Все методы отклонены HA:\n" + "\n".join(errors)
 
 class PrinterListener:
     def __init__(self):
@@ -208,137 +217,16 @@ def generate_preview(orientation):
         os.remove("/tmp/preview.jpg")
 
     if ext == 'pdf':
-        os.system(f"gs -dFirstPage=1 -dLastPage=1 -sDEVICE=jpeg -r72 -dJPEGQ=70 -sOutputFile=/tmp/preview.jpg -q -dNOPAUSE -dBATCH '{filepath}'")
-    elif ext in ['jpg', 'jpeg', 'png']:
-        os.system(f"cp '{filepath}' /tmp/preview.jpg")
-        
-    if orientation == "4" and os.path.exists("/tmp/preview.jpg"):
-        os.system("mogrify -rotate -90 /tmp/preview.jpg")
-        
-    return True
+        os.system(f"gs -dFirstСудя по предоставленным данным, проблема заключается в том, что вашему аддону не хватает прав для доступа к внутреннему API Home Assistant.
 
-@app.route("/")
-def index(): return render_template("index.html")
+*   **Блокировка доступа Supervisor-ом**: В логе `logs-19.txt` множество раз фиксируется предупреждение `[supervisor.api.proxy] Not permitted API access: db7d2e44_epson_utility`[span_4](start_span)[span_4](end_span). Это означает, что механизм безопасности Home Assistant Supervisor принудительно отклоняет запросы от вашего аддона "Epson Smart Service[span_5](start_span)"[span_5](end_span).
+*   **Ошибка HTTP 400**: На скриншоте `1790523170270.jpeg` интерфейс выдает ошибку `Ошибка (HTTP 400): 400: Bad Request` в ответ на попытку выполнить действие[span_6](start_span)[span_6](end_span). Эта ошибка возвращается самим Home Assistant, поскольку веб-интерфейс пытается отправить запрос, который Supervisor блокирует из-за отсутствия разрешений[span_7](start_span)[span_7](end_span).
+*   **Успешные вызовы в прошлом**: В логах Flask-сервера `logs-16.txt` видно, что ранее (в 13:08) запрос `POST /api/nozzle_check` отрабатывал успешно с кодом 200, однако более поздние `POST`-запросы (например, `POST /api/test_notify`) по времени совпадают с ошибками доступа `Not permitted API access` в логах Supervisor[span_8](start_span)[span_8](end_span)[span_9](start_span)[span_9](end_span).
+*   **Процесс разработки**: Лог `logs-19.txt` показывает, что вы активно дорабатываете аддон и последовательно собирали версии с 1.0.2 до 1.0.5 из репозитория `https://github.com/albertgermania888-dev/ha-apps`[span_10](start_span)[span_10](end_span). 
 
-@app.route("/api/state", methods=["GET"])
-def api_state():
-    opts = get_options()
-    st = load_state()
-    
-    device_state["auto_check"] = opts.get("auto_check_enabled", False)
-    device_state["auto_check_days"] = int(opts.get("auto_check_days", 7))
-    
-    last_print = st.get("last_print", time.time())
-    idle_seconds = time.time() - last_print
-    device_state["idle_days"] = int(idle_seconds // 86400)
-    
-    return jsonify(device_state)
+**Как исправить:**
+Поскольку это кастомный аддон, вам необходимо явно запросить доступ к Home Assistant API в его конфигурационном файле (`config.yaml` или `config.json`). 
 
-@app.route("/api/preview.jpg")
-def api_preview_image():
-    if os.path.exists("/tmp/preview.jpg"):
-        return send_file("/tmp/preview.jpg", mimetype='image/jpeg')
-    return "", 404
-
-@app.route("/api/upload", methods=["POST"])
-def api_upload():
-    if 'file' not in request.files: return jsonify({"status": "ERROR"}), 400
-    file = request.files['file']
-    orientation = request.form.get("orientation", "3")
-    ext = file.filename.split('.')[-1].lower()
-    
-    for f in glob.glob("/tmp/print_job.*"): os.remove(f)
-    filepath = f"/tmp/print_job.{ext}"
-    file.save(filepath)
-
-    generate_preview(orientation)
-    return jsonify({"status": "SUCCESS", "preview": f"api/preview.jpg?t={time.time()}"})
-
-@app.route("/api/render_preview", methods=["POST"])
-def api_render_preview():
-    orientation = request.json.get("orientation", "3")
-    if generate_preview(orientation):
-        return jsonify({"status": "SUCCESS", "preview": f"api/preview.jpg?t={time.time()}"})
-    return jsonify({"status": "ERROR"})
-
-@app.route("/api/test_notify", methods=["POST"])
-def api_test_notify():
-    success, code, text = send_notify("Тестовое сообщение от Epson Smart Service!")
-    if success:
-        return jsonify({"status": "SUCCESS", "msg": f"Успех (HTTP {code}):\n{text}"})
-    else:
-        return jsonify({"status": "ERROR", "msg": f"Ошибка (HTTP {code}):\n{text}"})
-
-def execute_print(filepath, data):
-    copies = data.get("copies", "1")
-    color = data.get("color", "color")
-    media = data.get("media", "A4")
-    quality = data.get("quality", "4")
-    orientation = data.get("orientation", "3")
-    pages = data.get("pages", "").strip()
-
-    if color == "color":
-        st = load_state()
-        st['last_print'] = time.time()
-        save_state(st)
-
-    cmd = f"lp -d {PRINTER_DOC} -n {copies} -o media={media} -o print-color-mode={color} -o print-quality={quality} -o orientation-requested={orientation} -o fit-to-page"
-    if pages: cmd += f" -o page-ranges={pages}"
-    cmd += f" '{filepath}'"
-
-    res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    if res.returncode == 0:
-        update_ha(HA_API_CMD, "SUCCESS", "mdi:printer", "Документ отправлен в очередь")
-        return {"status": "SUCCESS", "msg": "Файл передан в печать"}
-    return {"status": "ERROR", "msg": f"Ошибка CUPS: {res.stderr}"}
-
-@app.route("/api/print", methods=["POST"])
-def api_print():
-    files = glob.glob("/tmp/print_job.*")
-    if not files: return jsonify({"status": "ERROR", "msg": "Файл не загружен"}), 400
-    res = execute_print(files[0], request.json)
-    return jsonify(res), (200 if res["status"] == "SUCCESS" else 500)
-
-@app.route("/api/print_local_file", methods=["POST"])
-def api_print_local_file():
-    data = request.json
-    filepath = data.get("file")
-    if not filepath or not os.path.exists(filepath):
-        return jsonify({"status": "ERROR", "msg": "Файл не найден"}), 404
-    res = execute_print(filepath, data)
-    return jsonify(res), (200 if res["status"] == "SUCCESS" else 500)
-
-@app.route("/api/<action>", methods=["POST"])
-def do_action(action):
-    ip = get_ip_and_model()
-    if ip == "127.0.0.1" or ip == "Не найден":
-         return jsonify({"status": "ERROR", "msg": "Принтер не найден"}), 404
-
-    os.system(f"cancel -a {PRINTER_RAW} > /dev/null 2>&1")
-    if action == "nozzle_check":
-        cmd = f"escputil --nozzle-check --printer-name {PRINTER_RAW}"
-        action_name = "проверки дюз"
-    elif action == "clean_head":
-        cmd = f"escputil --clean-head --printer-name {PRINTER_RAW}"
-        action_name = "прочистки головки"
-    else: return jsonify({"status": "ERROR"}), 400
-
-    st = load_state()
-    st['last_print'] = time.time()
-    save_state(st)
-
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-    if result.returncode == 0:
-        update_ha(HA_API_CMD, "SUCCESS", "mdi:printer-check", f"Команда {action} отправлена")
-        send_notify(f"✅ Ручной запуск {action_name} успешно отправлен на Epson")
-        return jsonify({"status": "SUCCESS", "msg": "Задание запущено"})
-    else:
-        err = result.stderr.strip() if result.stderr else "Ошибка escputil"
-        update_ha(HA_API_CMD, "ERROR", "mdi:alert", err)
-        send_notify(f"❌ Ошибка {action_name} на Epson:\n{err}")
-        return jsonify({"status": "ERROR", "msg": err}), 500
-
-if __name__ == "__main__":
-    os.environ["PYTHONUNBUFFERED"] = "1"
-    threading.Thread(target=background_poller, daemon=True).start()
-    app.run(host="0.0.0.0", port=8099)
+Добавьте в конфигурацию аддона следующий параметр:
+```yaml
+hassapi: true
