@@ -1,5 +1,5 @@
 name: "Epson Smart Service"
-version: "1.0.0"
+version: "1.0.1"
 slug: "epson_utility"
 description: "Печать, реальный предпросмотр, сервис и системные уведомления HA."
 arch:
