@@ -38,8 +38,9 @@
         <p style="margin: 0 0 15px 0; font-size: 13px; color: #888;">IP: <span id="st_ip">Поиск...</span></p>
         
         <div class="status-box">
-            Состояние: <span class="status-val" id="st_printer">Синхронизация...</span><br>
-            <span style="font-size: 11px; color: #888; font-weight: normal;">* Авто-печать и уведомления настраиваются во вкладке Конфигурация</span>
+            <div style="margin-bottom: 5px;">Состояние: <span class="status-val" id="st_printer">Синхронизация...</span></div>
+            <div style="margin-bottom: 8px;">Без печати: <span class="status-val" id="st_idle">Сбор данных...</span></div>
+            <span style="font-size: 11px; color: #888; font-weight: normal; line-height: 1.2;">* Авто-печать и уведомления настраиваются во вкладке Конфигурация аддона.</span>
         </div>
 
         <div class="section">
@@ -112,12 +113,22 @@
                     document.getElementById('st_model').innerText = data.model;
                     document.getElementById('st_ip').innerText = data.ip;
                     document.getElementById('st_printer').innerText = data.status;
+                    
+                    // Формирование текста таймера простоя
+                    let idleText = data.idle_days + " дн.";
+                    if (data.auto_check) {
+                        let left = data.auto_check_days - data.idle_days;
+                        if (left < 0) left = 0;
+                        idleText += ` (осталось до авто-теста: ${left} дн.)`;
+                    } else {
+                        idleText += " (авто-тест выключен)";
+                    }
+                    document.getElementById('st_idle').innerText = idleText;
                 }).catch(err => console.error(err));
         }
         setInterval(fetchStatus, 3000);
         fetchStatus();
 
-        // Запрос реального перерендеринга предпросмотра при смене ориентации
         document.getElementById('p_orientation').addEventListener('change', function(e) {
             const previewContainer = document.getElementById('preview_container');
             if (previewContainer.style.display === 'none') return;
