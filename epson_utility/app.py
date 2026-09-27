@@ -10,7 +10,6 @@ from flask import Flask, render_template, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 from zeroconf import Zeroconf, ServiceBrowser
 
-# Отключаем спам в логах об использовании самоподписанных SSL-сертификатов принтера
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
@@ -85,6 +84,7 @@ class PrinterListener:
         self.found_ip = None
         self.found_model = "Epson (Неизвестная модель)"
     def remove_service(self, zeroconf, type, name): pass
+    def update_service(self, zeroconf, type, name): pass
     def add_service(self, zeroconf, type, name):
         if "epson" in name.lower() or "printer" in name.lower():
             info = zeroconf.get_service_info(type, name)
@@ -151,7 +151,6 @@ def setup_cups(ip):
     if f"socket://{ip}" not in subprocess.run(f"lpstat -v {PRINTER_RAW}", shell=True, capture_output=True, text=True).stdout:
         os.system(f"lpadmin -p {PRINTER_RAW} -v socket://{ip}:9100 -E")
 
-# --- ПРЯМОЙ ПАРСИНГ ВЕБ-ИНТЕРФЕЙСА EPSON ---
 def check_printer_status(ip):
     if ip in ["127.0.0.1", "Не найден"]: return "Не найден", "Офлайн"
     
@@ -165,7 +164,6 @@ def check_printer_status(ip):
     html = ""
     for url in urls_to_try:
         try:
-            # verify=False пропускает проверку самоподписанного сертификата
             res = requests.get(url, timeout=3, verify=False)
             if res.status_code == 200:
                 html += res.text.lower() + " "
@@ -187,9 +185,7 @@ def check_printer_status(ip):
         
     return "Неизвестно", "Связь установлена (Статус скрыт)"
 
-# --- АСИНХРОННЫЙ МОНИТОРИНГ ФИЗИЧЕСКОЙ ПЕЧАТИ ---
 def monitor_job(ip, action_name):
-    # 1. Ждем перехода в статус Busy (даем принтеру до 20 секунд на реакцию)
     became_busy = False
     for _ in range(10):
         time.sleep(2)
@@ -202,8 +198,7 @@ def monitor_job(ip, action_name):
             send_notify(f"❌ Сбой запуска '{action_name}'. Принтер выдал ошибку (нет бумаги или замятие).")
             return
 
-    # 2. Дожидаемся возврата в Готов (Available) или Ошибку (An error has occurred)
-    for _ in range(60): # Ждем до 120 секунд завершения печати
+    for _ in range(60):
         time.sleep(2)
         raw_state, _ = check_printer_status(ip)
         
@@ -225,7 +220,6 @@ def run_action_and_monitor(ip, cmd, action_name):
         err = res.stderr.strip() if res.stderr else "Сбой CUPS"
         send_notify(f"❌ Системная ошибка отправки '{action_name}':\n{err}")
         return
-    # Данные отправлены в сеть - запускаем мониторинг веб-морды принтера
     monitor_job(ip, action_name)
 
 def background_poller():
@@ -282,7 +276,6 @@ def index(): return render_template("index.html")
 @app.route("/api/state", methods=["GET"])
 def api_state():
     ip = get_ip_and_model()
-    # СИНХРОННОЕ ОБНОВЛЕНИЕ: Запрашиваем статус прямо в момент загрузки страницы
     raw_state, display_state = check_printer_status(ip)
     device_state["status"] = display_state
     
@@ -325,7 +318,6 @@ def api_test_notify():
 def execute_print(filepath, data):
     ip = get_ip_and_model()
     
-    # БЛОКИРОВКА: Читаем статус до отправки
     raw_state, _ = check_printer_status(ip)
     if raw_state == "Ошибка оборудования":
         return {"status": "ERROR", "msg": "Заблокировано: Ошибка принтера (проверьте лоток)"}
@@ -371,7 +363,6 @@ def api_print_local_file():
 def do_action(action):
     ip = get_ip_and_model()
     
-    # БЛОКИРОВКА: Запрет обслуживания при ошибке (например, нет бумаги)
     raw_state, _ = check_printer_status(ip)
     if raw_state == "Ошибка оборудования":
         return jsonify({"status": "ERROR", "msg": "Заблокировано: Ошибка принтера (проверьте лоток)"}), 400
