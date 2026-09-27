@@ -53,31 +53,28 @@ def send_notify(msg):
     if not SUPERVISOR_TOKEN: return False, 0, "Нет токена"
         
     headers = {"Authorization": f"Bearer {SUPERVISOR_TOKEN}", "Content-Type": "application/json"}
-    errors = []
     
     try:
         url1 = "http://supervisor/core/api/services/notify/send_message"
         res1 = requests.post(url1, headers=headers, json={"entity_id": target_val, "message": msg}, timeout=5)
-        if res1.status_code in [200, 201]: return True, res1.status_code, "Успех (V1)"
-        errors.append(f"V1: {res1.text.strip()}")
-    except Exception as e: errors.append(f"V1 Error: {e}")
+        if res1.status_code in [200, 201]: return True, res1.status_code, "Успех"
+    except: pass
 
     try:
         if "." in target_val:
             domain, service = target_val.split(".", 1)
             url2 = f"http://supervisor/core/api/services/{domain}/{service}"
             res2 = requests.post(url2, headers=headers, json={"message": msg}, timeout=5)
-            if res2.status_code in [200, 201]: return True, res2.status_code, "Успех (V2)"
-            errors.append(f"V2: {res2.text.strip()}")
-    except Exception as e: errors.append(f"V2 Error: {e}")
+            if res2.status_code in [200, 201]: return True, res2.status_code, "Успех"
+    except: pass
         
     try:
         url3 = "http://supervisor/core/api/services/telegram_bot/send_message"
         res3 = requests.post(url3, headers=headers, json={"message": msg}, timeout=5)
-        if res3.status_code in [200, 201]: return True, res3.status_code, "Успех (V3)"
+        if res3.status_code in [200, 201]: return True, res3.status_code, "Успех"
     except: pass
         
-    return False, 400, "Ошибка отправки:\n" + "\n".join(errors)
+    return False, 400, "Ошибка отправки"
 
 class PrinterListener:
     def __init__(self):
@@ -145,63 +142,58 @@ def setup_cups(ip):
     if ip in ["127.0.0.1", "Не найден"]: return
     os.system("service cups start > /dev/null 2>&1")
     time.sleep(1)
-    
-    # Разрешаем внешний доступ к веб-интерфейсу CUPS (порт 631)
-    os.system("cupsctl --remote-admin --remote-any --share-printers > /dev/null 2>&1")
-    
     if f"ipp://{ip}" not in subprocess.run(f"lpstat -v {PRINTER_DOC}", shell=True, capture_output=True, text=True).stdout:
         os.system(f"lpadmin -p {PRINTER_DOC} -v ipp://{ip}/ipp/print -m everywhere -E")
     if f"socket://{ip}" not in subprocess.run(f"lpstat -v {PRINTER_RAW}", shell=True, capture_output=True, text=True).stdout:
         os.system(f"lpadmin -p {PRINTER_RAW} -v socket://{ip}:9100 -E")
 
-# --- ПРОВЕРКА ОШИБОК ЧЕРЕЗ CUPS (Универсально) ---
-def check_cups_error():
-    # Опрашиваем IPP очередь, так как она поддерживает реальную связь с железом
-    stat = subprocess.run(f"lpstat -p {PRINTER_DOC}", shell=True, capture_output=True, text=True).stdout.lower()
-    if "media-empty" in stat or "out of paper" in stat or "tray-empty" in stat:
-        return "Нет бумаги"
-    if "offline" in stat or "unreachable" in stat:
-        return "Принтер недоступен"
-    if "jam" in stat:
-        return "Замятие бумаги"
+# --- ПАРСИНГ РОДНОЙ СТРАНИЦЫ ПРИНТЕРА ---
+def check_printer_error(ip):
+    if ip in ["127.0.0.1", "Не найден"]: return None
+    try:
+        res = requests.get(f"http://{ip}/PRESENTATION/ADVANCED/COMMON/TOP", timeout=2)
+        if res.status_code == 200:
+            html = res.text.lower()
+            if "error has occurred" in html or "fatal error" in html or "paper out" in html:
+                return "Ошибка оборудования (Нет бумаги / Замятие)"
+    except: pass
     return None
 
-# --- АСИНХРОННЫЙ МОНИТОРИНГ ЧЕРЕЗ CUPS ---
-def monitor_job(action_name):
-    time.sleep(6) # Даем принтеру время на старт механики
+# --- АСИНХРОННЫЙ МОНИТОРИНГ ЧЕРЕЗ ВЕБ-СЕРВЕР EPSON ---
+def monitor_job(ip, action_name):
+    time.sleep(6) 
     
-    for _ in range(30): # Мониторим до 90 секунд (30 раз по 3 сек)
-        stat = subprocess.run(f"lpstat -p {PRINTER_DOC}", shell=True, capture_output=True, text=True).stdout.lower()
-        
-        # 1. Проверяем наличие аппаратной ошибки
-        if any(err in stat for err in ["media-empty", "out of paper", "tray-empty", "jam"]):
-            update_ha(HA_API_CMD, "ERROR", "mdi:alert", "Сбой (Остановка механизмов)")
-            send_notify(f"❌ Сбой принтера во время '{action_name}'. Проверьте бумагу или замятие.")
-            return
-            
-        # 2. Проверяем, крутит ли принтер шестеренками
-        if "printing" in stat or "busy" in stat or "processing" in stat:
-            time.sleep(3)
-            continue
-            
-        # 3. Если он перешел в статус ожидания (значит, лист успешно вышел)
-        if "idle" in stat or "ready" in stat:
-            update_ha(HA_API_CMD, "SUCCESS", "mdi:printer-check", "Успешно")
-            send_notify(f"✅ Успешно завершено: {action_name}.")
-            return
-            
+    for _ in range(30):
+        try:
+            res = requests.get(f"http://{ip}/PRESENTATION/ADVANCED/COMMON/TOP", timeout=3)
+            if res.status_code == 200:
+                html = res.text.lower()
+                
+                if "error has occurred" in html or "fatal error" in html or "paper out" in html:
+                    update_ha(HA_API_CMD, "ERROR", "mdi:alert", "Сбой при печати")
+                    send_notify(f"❌ Сбой принтера во время '{action_name}'. Вероятно, замятие или кончилась бумага.")
+                    return
+                    
+                if "busy." in html:
+                    time.sleep(3)
+                    continue
+                    
+                if "available." in html:
+                    update_ha(HA_API_CMD, "SUCCESS", "mdi:printer-check", "Успешно")
+                    send_notify(f"✅ Успешно завершено: {action_name}.")
+                    return
+        except: pass
         time.sleep(3)
         
-    send_notify(f"⚠️ Задание '{action_name}' отправлено, но статус результата неизвестен (таймаут CUPS).")
+    send_notify(f"⚠️ Задание '{action_name}' отправлено, но статус результата неизвестен (таймаут).")
 
-def run_action_and_monitor(cmd, action_name):
+def run_action_and_monitor(ip, cmd, action_name):
     res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     if res.returncode != 0:
         err = res.stderr.strip() if res.stderr else "Ошибка отправки"
         send_notify(f"❌ Системная ошибка отправки '{action_name}':\n{err}")
         return
-    # Начинаем опрашивать CUPS о физическом статусе
-    monitor_job(action_name)
+    monitor_job(ip, action_name)
 
 def background_poller():
     time.sleep(5)
@@ -213,18 +205,22 @@ def background_poller():
             update_ha(HA_API_STATUS, "Не найден", "mdi:printer-search", "Автопоиск не удался")
             device_state["status"] = "Устройство не найдено"
         else:
-            err_msg = check_cups_error()
+            err_msg = check_printer_error(ip)
             if err_msg:
                 status_text = f"Требует внимания: {err_msg}"
                 update_ha(HA_API_STATUS, "Ошибка", "mdi:alert")
             else:
-                stat = subprocess.run(f"lpstat -p {PRINTER_DOC}", shell=True, capture_output=True, text=True).stdout.lower()
-                if "printing" in stat or "busy" in stat:
-                    status_text = "Печатает (Занят)..."
-                    update_ha(HA_API_STATUS, "Печатает", "mdi:printer-3d-nozzle")
-                else:
-                    status_text = "Готов (Простаивает)"
-                    update_ha(HA_API_STATUS, "Готов", "mdi:printer-check")
+                try:
+                    res = requests.get(f"http://{ip}/PRESENTATION/ADVANCED/COMMON/TOP", timeout=2)
+                    html = res.text.lower() if res.status_code == 200 else ""
+                    if "busy." in html:
+                        status_text = "Печатает (Занят)..."
+                        update_ha(HA_API_STATUS, "Печатает", "mdi:printer-3d-nozzle")
+                    else:
+                        status_text = "Готов (Простаивает)"
+                        update_ha(HA_API_STATUS, "Готов", "mdi:printer-check")
+                except:
+                    status_text = "Связь установлена"
                     
             device_state["status"] = status_text
 
@@ -235,13 +231,13 @@ def background_poller():
             
             if auto_enabled and (time.time() - st.get("last_print", 0)) > (auto_days * 86400):
                 if err_msg:
-                    send_notify(f"⚠️ Авто-проверка дюз отложена: принтер сообщает об ошибке ({err_msg}).")
+                    send_notify(f"⚠️ Авто-проверка дюз отложена: принтер Epson в состоянии ошибки ({err_msg}). Пожалуйста, устраните проблему.")
                     st['last_print'] += 86400 
                     save_state(st)
                 else:
                     os.system(f"cancel -a {PRINTER_RAW} > /dev/null 2>&1")
                     cmd = f"escputil --nozzle-check --printer-name {PRINTER_RAW}"
-                    threading.Thread(target=run_action_and_monitor, args=(cmd, "Авто-проверка дюз")).start()
+                    threading.Thread(target=run_action_and_monitor, args=(ip, cmd, "Авто-проверка дюз")).start()
                     st['last_print'] = time.time()
                     save_state(st)
         
@@ -311,10 +307,12 @@ def api_test_notify():
     else: return jsonify({"status": "ERROR", "msg": f"Ошибка (HTTP {code}):\n{text}"})
 
 def execute_print(filepath, data):
-    err = check_cups_error()
-    if err:
-        update_ha(HA_API_CMD, "ERROR", "mdi:alert", err)
-        return {"status": "ERROR", "msg": f"Заблокировано: {err}"}
+    ip = get_ip_and_model()
+    if ip not in ["127.0.0.1", "Не найден"]:
+        err = check_printer_error(ip)
+        if err:
+            update_ha(HA_API_CMD, "ERROR", "mdi:alert", err)
+            return {"status": "ERROR", "msg": f"Заблокировано: {err}"}
 
     copies = data.get("copies", "1")
     color = data.get("color", "color")
@@ -332,8 +330,8 @@ def execute_print(filepath, data):
     if pages: cmd += f" -o page-ranges={pages}"
     cmd += f" '{filepath}'"
 
-    threading.Thread(target=run_action_and_monitor, args=(cmd, "Печать документа")).start()
-    return {"status": "SUCCESS", "msg": "Задание отправлено. Ожидайте окончания..."}
+    threading.Thread(target=run_action_and_monitor, args=(ip, cmd, "Печать документа")).start()
+    return {"status": "SUCCESS", "msg": "Задание отправлено на принтер. Ожидайте..."}
 
 @app.route("/api/print", methods=["POST"])
 def api_print():
@@ -353,7 +351,11 @@ def api_print_local_file():
 
 @app.route("/api/<action>", methods=["POST"])
 def do_action(action):
-    err = check_cups_error()
+    ip = get_ip_and_model()
+    if ip in ["127.0.0.1", "Не найден"]:
+         return jsonify({"status": "ERROR", "msg": "Принтер не найден"}), 404
+
+    err = check_printer_error(ip)
     if err:
         update_ha(HA_API_CMD, "ERROR", "mdi:alert", err)
         return jsonify({"status": "ERROR", "msg": f"Заблокировано: {err}"}), 400
@@ -371,8 +373,8 @@ def do_action(action):
     st['last_print'] = time.time()
     save_state(st)
 
-    threading.Thread(target=run_action_and_monitor, args=(cmd, action_name)).start()
-    return jsonify({"status": "SUCCESS", "msg": "Задание отправлено. Ожидайте окончания..."})
+    threading.Thread(target=run_action_and_monitor, args=(ip, cmd, action_name)).start()
+    return jsonify({"status": "SUCCESS", "msg": "Задание отправлено на принтер. Ожидайте..."})
 
 if __name__ == "__main__":
     os.environ["PYTHONUNBUFFERED"] = "1"
