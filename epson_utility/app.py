@@ -45,26 +45,28 @@ def save_state(state):
     with open(STATE_PATH, "w") as f:
         json.dump(state, f)
 
-# ВЫЗОВ НАСТРОЕННОГО СЕРВИСА УВЕДОМЛЕНИЙ В HOME ASSISTANT
 def send_notify(msg):
     opts = get_options()
-    notify_serv = str(opts.get("notify_service", "")).strip()
+    entity_id = str(opts.get("notify_service", "")).strip()
     
-    if not notify_serv or not SUPERVISOR_TOKEN:
+    if not entity_id or not SUPERVISOR_TOKEN:
         return
         
-    if "." in notify_serv:
-        domain, service = notify_serv.split(".", 1)
-    else:
-        domain = "notify"
-        service = notify_serv
-
-    url = f"http://supervisor/core/api/services/{domain}/{service}"
+    url = "http://supervisor/core/api/services/notify/send_message"
     headers = {"Authorization": f"Bearer {SUPERVISOR_TOKEN}", "Content-Type": "application/json"}
+    
     try:
-        requests.post(url, headers=headers, json={"message": msg}, timeout=5)
+        payload = {
+            "entity_id": entity_id,
+            "message": msg
+        }
+        res = requests.post(url, headers=headers, json=payload, timeout=5)
+        if res.status_code not in [200, 201]:
+            print(f"[ERROR] Ошибка HA notify.send_message ({res.status_code}): {res.text}")
+        else:
+            print(f"[INFO] Уведомление успешно отправлено на {entity_id}")
     except Exception as e:
-        print(f"[ERROR] Ошибка вызова сервиса {notify_serv}: {e}")
+        print(f"[ERROR] Сбой вызова универсальной службы уведомлений: {e}")
 
 class PrinterListener:
     def __init__(self):
@@ -113,6 +115,11 @@ def get_ip_and_model():
     if ip:
         CACHED_IP, device_state["ip"], device_state["model"] = ip, ip, model
         return ip
+        
+    if CACHED_IP:
+        device_state["ip"] = CACHED_IP
+        return CACHED_IP
+        
     device_state["ip"] = "Не найден"
     return "127.0.0.1"
 
@@ -142,45 +149,38 @@ def background_poller():
             update_ha(HA_API_STATUS, "Не найден", "mdi:printer-search", "Автопоиск не удался")
             device_state["status"] = "Устройство не найдено"
         else:
-            if subprocess.run(["ping", "-c", "1", "-W", "2", ip], stdout=subprocess.DEVNULL).returncode != 0:
-                update_ha(HA_API_STATUS, "Выключен", "mdi:printer-off", "Принтер обесточен")
-                device_state["status"] = "Выключен / Недоступен"
+            stat = subprocess.run(f"lpstat -p {PRINTER_DOC}", shell=True, capture_output=True, text=True).stdout.lower()
+            if "media-empty" in stat or "out of paper" in stat:
+                status_text = "Нет бумаги / Замятие"
+                update_ha(HA_API_STATUS, "Нет бумаги", "mdi:tray-alert")
+            elif "printing" in stat:
+                status_text = "Печатает..."
+                update_ha(HA_API_STATUS, "Печатает", "mdi:printer-3d-nozzle")
             else:
-                stat = subprocess.run(f"lpstat -p {PRINTER_DOC}", shell=True, capture_output=True, text=True).stdout.lower()
-                if "media-empty" in stat or "out of paper" in stat:
-                    status_text = "Нет бумаги / Замятие"
-                    update_ha(HA_API_STATUS, "Нет бумаги", "mdi:tray-alert")
-                elif "printing" in stat:
-                    status_text = "Печатает..."
-                    update_ha(HA_API_STATUS, "Печатает", "mdi:printer-3d-nozzle")
-                else:
-                    status_text = "Готов (Простаивает)"
-                    update_ha(HA_API_STATUS, "Готов", "mdi:printer-check")
-                device_state["status"] = status_text
+                status_text = "Готов (Простаивает)"
+                update_ha(HA_API_STATUS, "Готов", "mdi:printer-check")
+            device_state["status"] = status_text
 
-                # УМНЫЙ ТАЙМЕР ПЕЧАТИ
-                opts = get_options()
-                auto_enabled = opts.get("auto_check_enabled", False)
-                auto_days = int(opts.get("auto_check_days", 7))
+            opts = get_options()
+            auto_enabled = opts.get("auto_check_enabled", False)
+            auto_days = int(opts.get("auto_check_days", 7))
+            
+            st = load_state()
+            if auto_enabled and (time.time() - st.get("last_print", 0)) > (auto_days * 86400):
+                os.system(f"cancel -a {PRINTER_RAW} > /dev/null 2>&1")
+                res = subprocess.run(f"escputil --nozzle-check --printer-name {PRINTER_RAW}", shell=True, capture_output=True, text=True)
                 
-                st = load_state()
-                if auto_enabled and (time.time() - st.get("last_print", 0)) > (auto_days * 86400):
-                    print(f"[INFO] Сработал авто-таймер ({auto_days} дней простоя). Печать проверки дюз...")
-                    os.system(f"cancel -a {PRINTER_RAW} > /dev/null 2>&1")
-                    res = subprocess.run(f"escputil --nozzle-check --printer-name {PRINTER_RAW}", shell=True, capture_output=True, text=True)
+                if res.returncode == 0:
+                    send_notify("✅ Автоматическая проверка дюз на Epson успешно завершена.")
+                else:
+                    err = res.stderr.strip() if res.stderr else "Сбой escputil"
+                    send_notify(f"❌ Ошибка авто-проверки дюз на Epson:\n{err}")
                     
-                    if res.returncode == 0:
-                        send_notify("✅ Автоматическая проверка дюз на Epson успешно завершена.")
-                    else:
-                        err = res.stderr.strip() if res.stderr else "Сбой escputil"
-                        send_notify(f"❌ Ошибка авто-проверки дюз на Epson:\n{err}")
-                        
-                    st['last_print'] = time.time()
-                    save_state(st)
+                st['last_print'] = time.time()
+                save_state(st)
         
         time.sleep(15)
 
-# --- ГЕНЕРАТОР РЕАЛЬНОГО ПРЕДПРОСМОТРА ---
 def generate_preview(orientation):
     files = glob.glob("/tmp/print_job.*")
     if not files: return False
@@ -195,7 +195,6 @@ def generate_preview(orientation):
     elif ext in ['jpg', 'jpeg', 'png']:
         os.system(f"cp '{filepath}' /tmp/preview.jpg")
         
-    # Применение реального поворота с помощью ImageMagick
     if orientation == "4" and os.path.exists("/tmp/preview.jpg"):
         os.system("mogrify -rotate -90 /tmp/preview.jpg")
         
@@ -207,7 +206,16 @@ def index(): return render_template("index.html")
 @app.route("/api/state", methods=["GET"])
 def api_state():
     opts = get_options()
+    st = load_state()
+    
     device_state["auto_check"] = opts.get("auto_check_enabled", False)
+    device_state["auto_check_days"] = int(opts.get("auto_check_days", 7))
+    
+    # Расчет дней с момента последней печати
+    last_print = st.get("last_print", time.time())
+    idle_seconds = time.time() - last_print
+    device_state["idle_days"] = int(idle_seconds // 86400)
+    
     return jsonify(device_state)
 
 @app.route("/api/preview.jpg")
@@ -298,7 +306,7 @@ def do_action(action):
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     if result.returncode == 0:
         update_ha(HA_API_CMD, "SUCCESS", "mdi:printer-check", f"Команда {action} отправлена")
-        send_notify(f"✅ Запуск {action_name} успешно отправлен на Epson")
+        send_notify(f"✅ Ручной запуск {action_name} успешно отправлен на Epson")
         return jsonify({"status": "SUCCESS", "msg": "Задание запущено"})
     else:
         err = result.stderr.strip() if result.stderr else "Ошибка escputil"
