@@ -45,38 +45,44 @@ def save_state(state):
     with open(STATE_PATH, "w") as f:
         json.dump(state, f)
 
-# Доработано: возвращает статус (True/False), код ошибки и сам текст ответа HA
+# --- ИДЕАЛЬНО ЧИСТАЯ ФУНКЦИЯ УВЕДОМЛЕНИЙ ДЛЯ НОВЫХ ВЕРСИЙ HA ---
 def send_notify(msg):
     opts = get_options()
-    entity_id = str(opts.get("notify_service", "")).strip()
+    notify_serv = str(opts.get("notify_service", "")).strip()
     
-    if not entity_id:
+    if not notify_serv:
         return False, 0, "В Конфигурации аддона не указана служба (notify_service пуст)"
     if not SUPERVISOR_TOKEN:
-        return False, 0, "Нет доступа к SUPERVISOR_TOKEN"
-        
-    url = "http://supervisor/core/api/services/notify/send_message"
-    headers = {"Authorization": f"Bearer {SUPERVISOR_TOKEN}", "Content-Type": "application/json"}
+        return False, 0, "Нет доступа к API. Проверьте параметр homeassistant_api: true в config.yaml"
+
+    # Разбираем строку (например, notify.telegram_bot_123) на домен и сервис
+    if "." in notify_serv:
+        domain, service = notify_serv.split(".", 1)
+    else:
+        domain = "notify"
+        service = notify_serv
+
+    # Формируем точный URL службы для актуального REST API
+    url = f"http://supervisor/core/api/services/{domain}/{service}"
+    headers = {
+        "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    # Отправляем строгий, чистый payload без лишних полей
+    payload = {"message": msg}
     
     try:
-        # Попробуем передать entity_id и в корне, и внутри target, 
-        # чтобы гарантированно подошло под любую версию Home Assistant
-        payload = {
-            "entity_id": entity_id,
-            "target": {"entity_id": entity_id},
-            "message": msg
-        }
-        res = requests.post(url, headers=headers, json=payload, timeout=5)
-        
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
         if res.status_code in [200, 201]:
-            print(f"[INFO] Уведомление успешно отправлено на {entity_id}")
-            return True, res.status_code, "OK (Успешно)"
+            print(f"[INFO] Уведомление успешно отправлено через {domain}.{service}")
+            return True, res.status_code, "OK (Успешно отправлено)"
         else:
             err_text = res.text
-            print(f"[ERROR] Ошибка HA notify.send_message ({res.status_code}): {err_text}")
+            print(f"[ERROR] Отказ HA API ({res.status_code}): {err_text}")
             return False, res.status_code, err_text
     except Exception as e:
-        print(f"[ERROR] Сбой вызова службы: {e}")
+        print(f"[ERROR] Сбой сети при вызове службы: {e}")
         return False, 0, str(e)
 
 class PrinterListener:
@@ -255,7 +261,6 @@ def api_render_preview():
         return jsonify({"status": "SUCCESS", "preview": f"api/preview.jpg?t={time.time()}"})
     return jsonify({"status": "ERROR"})
 
-# Новый маршрут специально для тестирования уведомлений и вывода лога
 @app.route("/api/test_notify", methods=["POST"])
 def api_test_notify():
     success, code, text = send_notify("Тестовое сообщение от Epson Smart Service!")
