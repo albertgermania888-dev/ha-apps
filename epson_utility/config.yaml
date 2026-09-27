@@ -13,8 +13,6 @@ ingress_port: 8099
 panel_icon: "mdi:printer-settings"
 panel_title: "Epson Service"
 homeassistant_api: true
-ports:
-  631/tcp: 631
 map:
   - config:rw
 options:
