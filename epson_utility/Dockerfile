@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     python3-requests \
     python3-werkzeug \
     python3-zeroconf \
+    python3-waitress \
     && rm -rf /var/lib/apt/lists/*
 
 COPY app.py /app.py
