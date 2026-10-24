@@ -20,6 +20,7 @@
         
         .status-box { background: #f1f8e9; padding: 12px; border-radius: 4px; border: 1px solid #c5e1a5; margin-bottom: 20px; text-align: left; font-size: 14px; }
         .status-val { font-weight: bold; color: #2e7d32; }
+        .status-err { font-weight: bold; color: #d32f2f; }
         
         .file-upload input[type="file"] { border: 1px dashed #03a9f4; padding: 15px; width: 100%; border-radius: 4px; box-sizing: border-box; background: #fcfcfc; cursor: pointer; margin-bottom: 15px; }
         
@@ -109,35 +110,42 @@
     </div>
 
     <script>
-        function fetchStatus() {
-            fetch('api/state')
+        function fetchStatus(force = false) {
+            const url = force ? 'api/state?force=1' : 'api/state';
+            fetch(url)
                 .then(res => res.json())
                 .then(data => {
                     document.getElementById('st_model').innerText = data.model;
                     document.getElementById('st_ip').innerText = data.ip;
-                    document.getElementById('st_printer').innerText = data.status;
+
+                    const stEl = document.getElementById('st_printer');
+                    stEl.innerText = data.status;
+                    stEl.className = data.status.includes('Ошибка') || data.status.includes('недоступен') ? 'status-err' : 'status-val';
                     
-                    let idleText = data.idle_days + " дн.";
+                    let idleText = `${data.idle_days} дн. ${data.idle_hours} ч.`;
                     if (data.auto_check) {
                         let left = data.auto_check_days - data.idle_days;
                         if (left < 0) left = 0;
-                        idleText += ` (осталось до авто-теста: ${left} дн.)`;
+                        idleText += ` (до авто-теста: ${left} дн.)`;
                     } else {
-                        idleText += " (авто-тест выключен)";
+                        idleText += " (авто-тест выкл.)";
+                    }
+                    if (data.last_print_str) {
+                        idleText += ` [с ${data.last_print_str}]`;
                     }
                     document.getElementById('st_idle').innerText = idleText;
                 }).catch(err => console.error(err));
         }
-        setInterval(fetchStatus, 3000);
-        fetchStatus();
 
-        // Функция диагностики
+        // При открытии страницы принудительно запрашиваем свежий статус с принтера
+        fetchStatus(true);
+        setInterval(() => fetchStatus(false), 3000);
+
         function testNotify() {
             setUIState(true, "Отправка запроса в ядро HA...", "#333");
             fetch('api/test_notify', { method: 'POST' })
                 .then(res => res.json())
                 .then(data => {
-                    // Показываем точный ответ от системы
                     alert("Ответ от Home Assistant:\n\n" + data.msg);
                     setUIState(false, data.status === "SUCCESS" ? "Тест успешен" : "Ошибка теста", data.status === "SUCCESS" ? "green" : "red");
                 })
@@ -205,15 +213,18 @@
         }
 
         function sendCommand(action) {
-            setUIState(true, "Отправка сервисной команды...", "#333");
+            setUIState(true, "Проверка принтера и отправка команды...", "#333");
             fetch('api/' + action, { method: 'POST' })
                 .then(res => res.json())
-                .then(data => setUIState(false, data.msg, data.status === "SUCCESS" ? "green" : "red"))
+                .then(data => {
+                    setUIState(false, data.msg, data.status === "SUCCESS" ? "green" : "red");
+                    fetchStatus(true);
+                })
                 .catch(err => setUIState(false, "Ошибка: " + err.message, "red"));
         }
 
         function printFile() {
-            setUIState(true, "Передача данных на принтер...", "#333");
+            setUIState(true, "Проверка принтера и передача данных...", "#333");
             const payload = {
                 copies: document.getElementById('p_copies').value,
                 color: document.getElementById('p_color').value,
@@ -235,6 +246,7 @@
                     document.getElementById('file_input').value = '';
                     document.getElementById('preview_container').style.display = 'none';
                 }
+                fetchStatus(true);
             })
             .catch(err => setUIState(false, "Ошибка сети: " + err.message, "red"));
         }
