@@ -2,6 +2,7 @@
 <html lang="ru">
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Epson Service</title>
     <style>
         body { font-family: Arial, sans-serif; padding: 15px; background: #fafafa; color: #333; margin: 0; }
@@ -24,7 +25,7 @@
         
         .file-upload input[type="file"] { border: 1px dashed #03a9f4; padding: 15px; width: 100%; border-radius: 4px; box-sizing: border-box; background: #fcfcfc; cursor: pointer; margin-bottom: 15px; }
         
-        .preview-box { display: none; margin-bottom: 15px; padding: 10px; border: 1px solid #e0e0e0; border-radius: 4px; background: #fafafa; text-align: center; min-height: 100px;}
+        .preview-box { display: none; margin-bottom: 15px; padding: 10px; border: 1px solid #e0e0e0; border-radius: 4px; background: #fafafa; text-align: center; min-height: 100px; }
         .preview-box img { max-width: 100%; max-height: 250px; border: 1px solid #ccc; border-radius: 4px; }
         
         .print-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; text-align: left; margin-bottom: 15px; }
@@ -110,9 +111,17 @@
     </div>
 
     <script>
+        let isFetching = false;
+
         function fetchStatus(force = false) {
+            if (isFetching) return;
+            isFetching = true;
+
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 2500);
             const url = force ? 'api/state?force=1' : 'api/state';
-            fetch(url)
+
+            fetch(url, { signal: controller.signal })
                 .then(res => res.json())
                 .then(data => {
                     document.getElementById('st_model').innerText = data.model;
@@ -120,7 +129,11 @@
 
                     const stEl = document.getElementById('st_printer');
                     stEl.innerText = data.status;
-                    stEl.className = data.status.includes('Ошибка') || data.status.includes('недоступен') ? 'status-err' : 'status-val';
+                    stEl.className = (
+                        data.status.includes('Ошибка') || 
+                        data.status.includes('Офлайн') || 
+                        data.status.includes('не найдено')
+                    ) ? 'status-err' : 'status-val';
                     
                     let idleText = `${data.idle_days} дн. ${data.idle_hours} ч.`;
                     if (data.auto_check) {
@@ -134,10 +147,14 @@
                         idleText += ` [с ${data.last_print_str}]`;
                     }
                     document.getElementById('st_idle').innerText = idleText;
-                }).catch(err => console.error(err));
+                })
+                .catch(err => {})
+                .finally(() => {
+                    clearTimeout(timer);
+                    isFetching = false;
+                });
         }
 
-        // При открытии страницы принудительно запрашиваем свежий статус с принтера
         fetchStatus(true);
         setInterval(() => fetchStatus(false), 3000);
 
@@ -166,9 +183,11 @@
             })
             .then(res => res.json())
             .then(data => {
-                if(data.preview) {
+                if (data.preview) {
                     previewImg.src = data.preview;
                     setUIState(false, "Форматирование обновлено", "green");
+                } else {
+                    setUIState(false, "Не удалось обновить предпросмотр", "red");
                 }
             }).catch(err => setUIState(false, "Ошибка: " + err.message, "red"));
         });
@@ -191,7 +210,7 @@
             fetch('api/upload', { method: 'POST', body: formData })
                 .then(res => res.json())
                 .then(data => {
-                    if(data.preview) {
+                    if (data.preview) {
                         previewImg.src = data.preview;
                         previewContainer.style.display = 'block';
                         setUIState(false, "Файл загружен. Готов к печати.", "green");
@@ -242,7 +261,7 @@
             .then(res => res.json())
             .then(data => {
                 setUIState(false, data.msg, data.status === "SUCCESS" ? "green" : "red");
-                if(data.status === "SUCCESS") {
+                if (data.status === "SUCCESS") {
                     document.getElementById('file_input').value = '';
                     document.getElementById('preview_container').style.display = 'none';
                 }
